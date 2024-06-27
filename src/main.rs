@@ -7,6 +7,7 @@ use xml::reader::{EventReader, XmlEvent};
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use std::time::Instant;
+use html_escape::decode_html_entities;
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
 
@@ -22,7 +23,7 @@ fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
 
             let seek_position = parts[0].parse::<u64>().unwrap();
             let article_id = parts[1].parse::<u32>().unwrap();
-            let article_title = parts[2].to_string();
+            let article_title = decode_html_entities(parts[2]).to_string();
             if IGNORE.iter().any(|prefix| article_title.starts_with(prefix)) { continue; }
 
             seek_position_map
@@ -33,6 +34,32 @@ fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     }
 
     seek_position_map
+}
+
+fn extract_links(text: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let mut start = 0;
+    while let Some(open_bracket) = text[start..].find("[[") {
+        if let Some(close_bracket) = text[start + open_bracket + 2..].find("]]") {
+            let link_start = start + open_bracket + 2;
+            let link_end = start + open_bracket + 2 + close_bracket;
+            let mut link = text[link_start..link_end].to_string();
+            if link.contains('|') {
+                link = link.split('|').collect::<Vec<_>>()[0].to_string();
+            }
+            if link.contains('#') {
+                link = link.split('#').collect::<Vec<_>>()[0].to_string();
+            }
+            let decoded_link = decode_html_entities(&link).to_string();
+            if !IGNORE.iter().any(|prefix| decoded_link.starts_with(prefix)) {
+                links.push(decoded_link);
+            }
+            start = link_end + 2;
+        } else {
+            break;
+        }
+    }
+    links
 }
 
 fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
@@ -89,28 +116,6 @@ fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
     }
 
     articles
-}
-
-fn extract_links(text: &str) -> Vec<String> {
-    let mut links = Vec::new();
-    let mut start = 0;
-    while let Some(open_bracket) = text[start..].find("[[") {
-        if let Some(close_bracket) = text[start + open_bracket + 2..].find("]]") {
-            let link_start = start + open_bracket + 2;
-            let link_end = start + open_bracket + 2 + close_bracket;
-            let link = text[link_start..link_end].to_string();
-            if !link.contains('|') {
-                links.push(link);
-            } else {
-                let parts: Vec<&str> = link.split('|').collect();
-                links.push(parts[0].to_string());
-            }
-            start = link_end + 2;
-        } else {
-            break;
-        }
-    }
-    links
 }
 
 fn main() {
@@ -177,7 +182,7 @@ fn main() {
                         for link in links {
                             match article_titles_to_ids_clone.get(link) {
                                 Some(&link_id) => link_ids.push(link_id),
-                                None => {} // println!("Warning: Link title '{}' not found in article_titles_to_ids", link),
+                                None => println!("Warning: Link title '{}' not found in article_titles_to_ids", link),
                             }
                         }
                         article_links.insert(*article_id, link_ids);
