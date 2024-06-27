@@ -6,6 +6,7 @@ use bzip2::read::BzDecoder;
 use xml::reader::{EventReader, XmlEvent};
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
+use std::time::Instant;
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
 
@@ -34,7 +35,7 @@ fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     seek_position_map
 }
 
-fn parse_chunk(xml_text: &str) -> HashMap<String, (u32, String)> {
+fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
     let parser = EventReader::new(xml_text.as_bytes());
     let mut articles = HashMap::new();
     let mut in_page = false;
@@ -60,7 +61,8 @@ fn parse_chunk(xml_text: &str) -> HashMap<String, (u32, String)> {
                 match name.local_name.as_str() {
                     "page" => {
                         in_page = false;
-                        articles.insert(current_title.clone(), (current_id, current_text.clone()));
+                        let links = extract_links(&current_text);
+                        articles.insert(current_id, (current_title.clone(), links));
                         current_title.clear();
                         current_text.clear();
                         current_id = 0;
@@ -89,21 +91,47 @@ fn parse_chunk(xml_text: &str) -> HashMap<String, (u32, String)> {
     articles
 }
 
+fn extract_links(text: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let mut start = 0;
+    while let Some(open_bracket) = text[start..].find("[[") {
+        if let Some(close_bracket) = text[start + open_bracket + 2..].find("]]") {
+            let link_start = start + open_bracket + 2;
+            let link_end = start + open_bracket + 2 + close_bracket;
+            let link = text[link_start..link_end].to_string();
+            if !link.contains('|') {
+                links.push(link);
+            } else {
+                let parts: Vec<&str> = link.split('|').collect();
+                links.push(parts[0].to_string());
+            }
+            start = link_end + 2;
+        } else {
+            break;
+        }
+    }
+    links
+}
+
 fn main() {
     let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
     let main_articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
 
+    let start_time = Instant::now();
     let seek_position_map = load_index(index_path);
     println!("Total number of chunks: {}", seek_position_map.len());
+    println!("Index extraction time: {:.3?}", start_time.elapsed());
 
+    let start_time = Instant::now();
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
     positions.sort_unstable();
 
     let num_threads = 4;
     let pool = ThreadPool::new(num_threads);
     let total_articles = Arc::new(Mutex::new(0));
+    let total_links = Arc::new(Mutex::new(0));
 
-    for chunk_index in 0..300.min(positions.len() - 1) {
+    for chunk_index in 0..100.min(positions.len() - 1) {
         let start_position = *positions[chunk_index];
         let end_position = *positions[chunk_index + 1];
         let chunk_size = (end_position - start_position) as usize;
@@ -116,6 +144,7 @@ fn main() {
             .expect("Error reading from the file");
 
         let total_articles_clone = Arc::clone(&total_articles);
+        let total_links_clone = Arc::clone(&total_links);
 
         pool.execute(move || {
             let mut decoder = BzDecoder::new(&buffer[..]);
@@ -126,8 +155,12 @@ fn main() {
             match String::from_utf8(decompressed_data) {
                 Ok(xml_text) => {
                     let articles = parse_chunk(&xml_text);
-                    let mut total = total_articles_clone.lock().unwrap();
-                    *total += articles.len();
+                    let mut total_articles = total_articles_clone.lock().unwrap();
+                    let mut total_links = total_links_clone.lock().unwrap();
+                    *total_articles += articles.len();
+                    for (_, (_, links)) in articles {
+                        *total_links += links.len();
+                    }
                 }
                 Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
             }
@@ -137,4 +170,6 @@ fn main() {
     pool.join();
 
     println!("Total articles extracted: {}", *total_articles.lock().unwrap());
+    println!("Total links extracted: {}", *total_links.lock().unwrap());
+    println!("Article extraction time: {:.3?}", start_time.elapsed());
 }
