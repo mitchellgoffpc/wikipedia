@@ -1,10 +1,11 @@
 use std::io::prelude::*;
 use std::io::{BufRead, BufReader, Read};
 use std::fs::File;
-use std::time::Instant;
 use std::collections::HashMap;
 use bzip2::read::BzDecoder;
 use xml::reader::{EventReader, XmlEvent};
+use std::sync::{Arc, Mutex};
+use threadpool::ThreadPool;
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
 
@@ -33,15 +34,16 @@ fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     seek_position_map
 }
 
-fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
+fn parse_chunk(xml_text: &str) -> HashMap<String, (u32, String)> {
     let parser = EventReader::new(xml_text.as_bytes());
     let mut articles = HashMap::new();
     let mut in_page = false;
     let mut in_title = false;
     let mut in_text = false;
+    let mut in_id = false;
     let mut current_title = String::new();
     let mut current_text = String::new();
-    let mut page_count = 0;
+    let mut current_id = 0;
 
     for event in parser {
         match event {
@@ -50,6 +52,7 @@ fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
                     "page" => in_page = true,
                     "title" => in_title = true,
                     "text" => in_text = true,
+                    "id" if in_page && current_id == 0 => in_id = true,
                     _ => {}
                 }
             }
@@ -57,13 +60,14 @@ fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
                 match name.local_name.as_str() {
                     "page" => {
                         in_page = false;
-                        page_count += 1;
-                        articles.insert(current_title.clone(), current_text.clone());
+                        articles.insert(current_title.clone(), (current_id, current_text.clone()));
                         current_title.clear();
                         current_text.clear();
+                        current_id = 0;
                     }
                     "title" => in_title = false,
                     "text" => in_text = false,
+                    "id" => in_id = false,
                     _ => {}
                 }
             }
@@ -73,6 +77,8 @@ fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
                         current_title.push_str(&text);
                     } else if in_text {
                         current_text.push_str(&text);
+                    } else if in_id {
+                        current_id = text.parse().unwrap_or(0);
                     }
                 }
             }
@@ -80,7 +86,7 @@ fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
         }
     }
 
-    (articles, page_count)
+    articles
 }
 
 fn main() {
@@ -88,41 +94,47 @@ fn main() {
     let main_articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
 
     let seek_position_map = load_index(index_path);
+    println!("Total number of chunks: {}", seek_position_map.len());
 
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
     positions.sort_unstable();
-    let first_position = positions[0];
-    let next_position = positions.get(1).copied().unwrap_or(first_position);
 
-    let mut buffer = vec![0u8; (next_position - first_position) as usize];
-    let mut file = File::open(main_articles_path).expect("Unable to open main articles file");
-    file.seek(std::io::SeekFrom::Start(*first_position))
-        .expect("Failed to seek to the first position");
-    file.read(&mut buffer)
-        .expect("Error reading from the file");
+    let num_threads = 4;
+    let pool = ThreadPool::new(num_threads);
+    let total_articles = Arc::new(Mutex::new(0));
 
-    let mut decoder = BzDecoder::new(&buffer[..]);
-    let mut decompressed_data = Vec::new();
-    decoder.read_to_end(&mut decompressed_data)
-           .expect("Error during decompression");
+    for chunk_index in 0..300.min(positions.len() - 1) {
+        let start_position = *positions[chunk_index];
+        let end_position = *positions[chunk_index + 1];
+        let chunk_size = (end_position - start_position) as usize;
 
-    match String::from_utf8(decompressed_data) {
-        Ok(xml_text) => {
-            let num_iterations = 10;
-            let mut durations = Vec::with_capacity(num_iterations);
+        let mut buffer = vec![0u8; chunk_size];
+        let mut file = File::open(main_articles_path).expect("Unable to open main articles file");
+        file.seek(std::io::SeekFrom::Start(start_position))
+            .expect("Failed to seek to the position");
+        file.read_exact(&mut buffer)
+            .expect("Error reading from the file");
 
-            for _ in 0..num_iterations {
-                let start = Instant::now();
-                let (articles, page_count) = parse_chunk(&xml_text);
-                let duration = start.elapsed();
-                durations.push(duration);
-                println!("Iteration {} - Pages extracted: {}, Duration: {:?}", durations.len(), page_count, duration);
+        let total_articles_clone = Arc::clone(&total_articles);
+
+        pool.execute(move || {
+            let mut decoder = BzDecoder::new(&buffer[..]);
+            let mut decompressed_data = Vec::new();
+            decoder.read_to_end(&mut decompressed_data)
+                   .expect("Error during decompression");
+
+            match String::from_utf8(decompressed_data) {
+                Ok(xml_text) => {
+                    let articles = parse_chunk(&xml_text);
+                    let mut total = total_articles_clone.lock().unwrap();
+                    *total += articles.len();
+                }
+                Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
             }
-
-            let total_duration: std::time::Duration = durations.iter().sum();
-            let avg_duration = total_duration / durations.len() as u32;
-            println!("Average duration over {} iterations: {:?}", num_iterations, avg_duration);
-        }
-        Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
+        });
     }
+
+    pool.join();
+
+    println!("Total articles extracted: {}", *total_articles.lock().unwrap());
 }

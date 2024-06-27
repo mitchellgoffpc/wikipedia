@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 bzip2 = "0.4.4"
 indicatif = "0.17.8"
+threadpool = "1.8.1"
 xml-rs = "0.8.20"
