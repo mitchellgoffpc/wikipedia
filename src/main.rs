@@ -123,6 +123,15 @@ fn main() {
     println!("Index extraction time: {:.3?}", start_time.elapsed());
 
     let start_time = Instant::now();
+    let article_titles_to_ids: HashMap<String, u32> = seek_position_map
+        .values()
+        .flat_map(|articles| articles.iter().map(|(id, title)| (title.clone(), *id)))
+        .collect();
+
+    println!("Total articles: {}", article_titles_to_ids.len());
+    println!("Title index creation time: {:.3?}", start_time.elapsed());
+
+    let start_time = Instant::now();
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
     positions.sort_unstable();
 
@@ -130,6 +139,8 @@ fn main() {
     let pool = ThreadPool::new(num_threads);
     let total_articles = Arc::new(Mutex::new(0));
     let total_links = Arc::new(Mutex::new(0));
+    let article_links = Arc::new(Mutex::new(HashMap::<u32, Vec<u32>>::new()));
+    let article_titles_to_ids = Arc::new(article_titles_to_ids);
 
     for chunk_index in 0..100.min(positions.len() - 1) {
         let start_position = *positions[chunk_index];
@@ -145,6 +156,8 @@ fn main() {
 
         let total_articles_clone = Arc::clone(&total_articles);
         let total_links_clone = Arc::clone(&total_links);
+        let article_titles_to_ids_clone = Arc::clone(&article_titles_to_ids);
+        let article_links_clone = Arc::clone(&article_links);
 
         pool.execute(move || {
             let mut decoder = BzDecoder::new(&buffer[..]);
@@ -157,10 +170,21 @@ fn main() {
                     let articles = parse_chunk(&xml_text);
                     let mut total_articles = total_articles_clone.lock().unwrap();
                     let mut total_links = total_links_clone.lock().unwrap();
-                    *total_articles += articles.len();
-                    for (_, (_, links)) in articles {
+                    let mut article_links = article_links_clone.lock().unwrap();
+
+                    for (article_id, (_, links)) in &articles {
+                        let mut link_ids = Vec::new();
+                        for link in links {
+                            match article_titles_to_ids_clone.get(link) {
+                                Some(&link_id) => link_ids.push(link_id),
+                                None => {} // println!("Warning: Link title '{}' not found in article_titles_to_ids", link),
+                            }
+                        }
+                        article_links.insert(*article_id, link_ids);
                         *total_links += links.len();
                     }
+
+                    *total_articles += articles.len();
                 }
                 Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
             }
