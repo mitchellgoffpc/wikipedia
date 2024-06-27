@@ -33,6 +33,56 @@ fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     seek_position_map
 }
 
+fn parse_chunk(xml_text: &str) -> (HashMap<String, String>, usize) {
+    let parser = EventReader::new(xml_text.as_bytes());
+    let mut articles = HashMap::new();
+    let mut in_page = false;
+    let mut in_title = false;
+    let mut in_text = false;
+    let mut current_title = String::new();
+    let mut current_text = String::new();
+    let mut page_count = 0;
+
+    for event in parser {
+        match event {
+            Ok(XmlEvent::StartElement { name, .. }) => {
+                match name.local_name.as_str() {
+                    "page" => in_page = true,
+                    "title" => in_title = true,
+                    "text" => in_text = true,
+                    _ => {}
+                }
+            }
+            Ok(XmlEvent::EndElement { name, .. }) => {
+                match name.local_name.as_str() {
+                    "page" => {
+                        in_page = false;
+                        page_count += 1;
+                        articles.insert(current_title.clone(), current_text.clone());
+                        current_title.clear();
+                        current_text.clear();
+                    }
+                    "title" => in_title = false,
+                    "text" => in_text = false,
+                    _ => {}
+                }
+            }
+            Ok(XmlEvent::Characters(text)) => {
+                if in_page {
+                    if in_title {
+                        current_title.push_str(&text);
+                    } else if in_text {
+                        current_text.push_str(&text);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (articles, page_count)
+}
+
 fn main() {
     let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
     let main_articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
@@ -58,41 +108,12 @@ fn main() {
 
     match String::from_utf8(decompressed_data) {
         Ok(xml_text) => {
-            let first_100_lines: Vec<&str> = xml_text.lines().take(100).collect();
-            for line in first_100_lines {
-                println!("{}", line);
-            }
-            println!("\n\n\n");
+            let num_iterations = 10;
+            let mut durations = Vec::with_capacity(num_iterations);
 
-            // let mut page_contents = Vec::new();
-            let NUM_ITERATIONS = 10;
-            let mut durations = Vec::with_capacity(NUM_ITERATIONS);
-
-            for _ in 0..NUM_ITERATIONS {
+            for _ in 0..num_iterations {
                 let start = Instant::now();
-
-                let parser = EventReader::new(xml_text.as_bytes());
-
-                let mut in_page = false;
-                let mut current_page = String::new();
-                let mut page_count = 0;
-
-                for event in parser {
-                    match event {
-                        Ok(XmlEvent::StartElement { name, .. }) if name.local_name == "page" => {
-                            in_page = true;
-                        }
-                        Ok(XmlEvent::EndElement { name, .. }) if name.local_name == "page" => {
-                            in_page = false;
-                            page_count += 1;
-                        }
-                        Ok(XmlEvent::Characters(text)) if in_page => {
-                            // current_page.push_str(&text);
-                        }
-                        _ => {}
-                    }
-                }
-
+                let (articles, page_count) = parse_chunk(&xml_text);
                 let duration = start.elapsed();
                 durations.push(duration);
                 println!("Iteration {} - Pages extracted: {}, Duration: {:?}", durations.len(), page_count, duration);
@@ -100,9 +121,7 @@ fn main() {
 
             let total_duration: std::time::Duration = durations.iter().sum();
             let avg_duration = total_duration / durations.len() as u32;
-            println!("Average duration over {} iterations: {:?}", NUM_ITERATIONS, avg_duration);
-
-            // println!("Number of pages extracted: {}", page_contents.len());
+            println!("Average duration over {} iterations: {:?}", num_iterations, avg_duration);
         }
         Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
     }
