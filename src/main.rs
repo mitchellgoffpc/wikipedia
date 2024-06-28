@@ -1,5 +1,5 @@
 use std::io::prelude::*;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::fs::File;
 use std::collections::HashMap;
 use bzip2::read::BzDecoder;
@@ -118,9 +118,47 @@ fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
     articles
 }
 
+fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, article_titles_to_ids: &HashMap<String, u32>) -> (HashMap<u32, Vec<u32>>, usize, usize, usize) {
+    let chunk_size = (end_position - start_position) as usize;
+    let mut buffer = vec![0u8; chunk_size];
+    let mut file = File::open(articles_path).expect("Unable to open articles file");
+    file.seek(std::io::SeekFrom::Start(start_position))
+        .expect("Failed to seek to the position");
+    file.read_exact(&mut buffer)
+        .expect("Error reading from the file");
+
+    let mut decoder = BzDecoder::new(&buffer[..]);
+    let mut decompressed_data = Vec::new();
+    decoder.read_to_end(&mut decompressed_data)
+           .expect("Error during decompression");
+
+    let xml_text = String::from_utf8(decompressed_data)
+        .expect("Failed to convert decompressed bytes to UTF-8");
+
+    let articles = parse_chunk(&xml_text);
+    let mut article_links = HashMap::new();
+    let mut total_links = 0;
+    let mut red_links = 0;
+
+    for (article_id, (_, links)) in &articles {
+        let mut link_ids = Vec::new();
+        for link in links {
+            match article_titles_to_ids.get(&link.to_lowercase()) {
+                Some(&link_id) => link_ids.push(link_id),
+                None => red_links += 1,
+            }
+        }
+        article_links.insert(*article_id, link_ids);
+        total_links += links.len();
+    }
+
+    (article_links, articles.len(), total_links, red_links)
+}
+
+
 fn main() {
     let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
-    let main_articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
+    let articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
 
     let start_time = Instant::now();
     let seek_position_map = load_index(index_path);
@@ -140,8 +178,9 @@ fn main() {
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
     positions.sort_unstable();
 
-    let num_threads = 4;
+    let num_threads = 8;
     let pool = ThreadPool::new(num_threads);
+    let articles_path = Arc::new(articles_path.to_string());
     let total_articles = Arc::new(Mutex::new(0));
     let total_links = Arc::new(Mutex::new(0));
     let red_links = Arc::new(Mutex::new(0));
@@ -151,52 +190,23 @@ fn main() {
     for chunk_index in 0..100.min(positions.len() - 1) {
         let start_position = *positions[chunk_index];
         let end_position = *positions[chunk_index + 1];
-        let chunk_size = (end_position - start_position) as usize;
 
-        let mut buffer = vec![0u8; chunk_size];
-        let mut file = File::open(main_articles_path).expect("Unable to open main articles file");
-        file.seek(std::io::SeekFrom::Start(start_position))
-            .expect("Failed to seek to the position");
-        file.read_exact(&mut buffer)
-            .expect("Error reading from the file");
-
-        let total_articles_clone = Arc::clone(&total_articles);
-        let total_links_clone = Arc::clone(&total_links);
-        let red_links_clone = Arc::clone(&red_links);
-        let article_titles_to_ids_clone = Arc::clone(&article_titles_to_ids);
-        let article_links_clone = Arc::clone(&article_links);
+        let total_articles = Arc::clone(&total_articles);
+        let total_links = Arc::clone(&total_links);
+        let red_links = Arc::clone(&red_links);
+        let article_titles_to_ids = Arc::clone(&article_titles_to_ids);
+        let article_links = Arc::clone(&article_links);
+        let articles_path = Arc::clone(&articles_path);
 
         pool.execute(move || {
-            let mut decoder = BzDecoder::new(&buffer[..]);
-            let mut decompressed_data = Vec::new();
-            decoder.read_to_end(&mut decompressed_data)
-                   .expect("Error during decompression");
+            let (chunk_article_links, chunk_article_count, chunk_total_links, chunk_red_links) =
+                process_chunk(&articles_path, start_position, end_position, &article_titles_to_ids);
 
-            match String::from_utf8(decompressed_data) {
-                Ok(xml_text) => {
-                    let articles = parse_chunk(&xml_text);
-                    let mut total_articles = total_articles_clone.lock().unwrap();
-                    let mut total_links = total_links_clone.lock().unwrap();
-                    let mut red_links = red_links_clone.lock().unwrap();
-                    let mut article_links = article_links_clone.lock().unwrap();
-
-                    for (article_id, (_, links)) in &articles {
-                        let mut link_ids = Vec::new();
-                        for link in links {
-                            match article_titles_to_ids_clone.get(&link.to_lowercase()) {
-                                Some(&link_id) => link_ids.push(link_id),
-                                None => *red_links += 1,
-                            }
-                        }
-                        article_links.insert(*article_id, link_ids);
-                        *total_links += links.len();
-                    }
-
-                    *total_articles += articles.len();
-                }
-                Err(e) => println!("Failed to convert decompressed bytes to UTF-8: {}", e),
-            }
-        });
+            *(total_articles.lock().unwrap()) += chunk_article_count;
+            *(total_links.lock().unwrap()) += chunk_total_links;
+            *(red_links.lock().unwrap()) += chunk_red_links;
+            article_links.lock().unwrap().extend(chunk_article_links);
+        })
     }
 
     pool.join();
@@ -205,4 +215,19 @@ fn main() {
     println!("Total links extracted: {}", *total_links.lock().unwrap());
     println!("Total red links: {}", *red_links.lock().unwrap());
     println!("Article extraction time: {:.3?}", start_time.elapsed());
+
+    // Dump article links map
+    let start_time = Instant::now();
+    let article_links = article_links.lock().unwrap();
+    let mut output_file = File::create("article_links.bin").expect("Failed to create output file");
+
+    for (&article_id, link_ids) in article_links.iter() {
+        output_file.write_all(&article_id.to_le_bytes()).expect("Failed to write article ID");
+        for &link_id in link_ids {
+            output_file.write_all(&link_id.to_le_bytes()).expect("Failed to write link ID");
+        }
+        output_file.write_all(&u32::MAX.to_le_bytes()).expect("Failed to write separator");
+    }
+
+    println!("Article links dump time: {:.3?}", start_time.elapsed());
 }
