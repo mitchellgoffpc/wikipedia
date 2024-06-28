@@ -87,12 +87,13 @@ fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
             Ok(XmlEvent::EndElement { name, .. }) => {
                 match name.local_name.as_str() {
                     "page" => {
-                        in_page = false;
-                        let links = extract_links(&current_text);
-                        articles.insert(current_id, (current_title.clone(), links));
+                        if !IGNORE.iter().any(|prefix| current_title.starts_with(prefix)) {
+                            articles.insert(current_id, (current_title.clone(), extract_links(&current_text)));
+                        }
                         current_title.clear();
                         current_text.clear();
                         current_id = 0;
+                        in_page = false;
                     }
                     "title" => in_title = false,
                     "text" => in_text = false,
@@ -143,7 +144,7 @@ fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, ar
     for (article_id, (_, links)) in &articles {
         let mut link_ids = Vec::new();
         for link in links {
-            match article_titles_to_ids.get(&link.to_lowercase()) {
+            match article_titles_to_ids.get(link) {
                 Some(&link_id) => link_ids.push(link_id),
                 None => red_links += 1,
             }
@@ -168,7 +169,11 @@ pub fn index() {
     let start_time = Instant::now();
     let article_titles_to_ids: HashMap<String, u32> = seek_position_map
         .values()
-        .flat_map(|articles| articles.iter().map(|(id, title)| (title.clone().to_lowercase(), *id)))
+        .flat_map(|articles| articles.iter().map(|(id, title)| (title.clone(), *id)))
+        .collect();
+    let article_ids_to_titles: HashMap<u32, String> = seek_position_map
+        .values()
+        .flat_map(|articles| articles.iter().map(|(id, title)| (*id, title.clone())))
         .collect();
 
     println!("Total articles: {}", article_titles_to_ids.len());
@@ -223,9 +228,17 @@ pub fn index() {
 
     for (&article_id, link_ids) in article_links.iter() {
         output_file.write_all(&article_id.to_le_bytes()).expect("Failed to write article ID");
+
+        let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
+        let title_bytes = title.as_bytes();
+        output_file.write_all(&(title_bytes.len() as u32).to_le_bytes()).expect("Failed to write title length");
+        output_file.write_all(title_bytes).expect("Failed to write title");
+
+        output_file.write_all(&(link_ids.len() as u32).to_le_bytes()).expect("Failed to write link count");
         for &link_id in link_ids {
             output_file.write_all(&link_id.to_le_bytes()).expect("Failed to write link ID");
         }
+
         output_file.write_all(&u32::MAX.to_le_bytes()).expect("Failed to write separator");
     }
 

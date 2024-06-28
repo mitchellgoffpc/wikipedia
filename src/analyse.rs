@@ -14,19 +14,21 @@ pub fn analyse() {
 
     // Parse the binary data
     let mut links: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut titles: HashMap<u32, String> = HashMap::new();
     let mut i = 0;
     while i < buffer.len() {
-        let article_id = u32::from_le_bytes([buffer[i], buffer[i+1], buffer[i+2], buffer[i+3]]);
-        i += 4;
-        let mut article_links = Vec::new();
-        loop {
-            let link_id = u32::from_le_bytes([buffer[i], buffer[i+1], buffer[i+2], buffer[i+3]]);
-            i += 4;
-            if link_id == u32::MAX {
-                break;
-            }
-            article_links.push(link_id);
-        }
+        let article_id = u32::from_le_bytes(buffer[i..i+4].try_into().unwrap());
+        let title_length = u32::from_le_bytes(buffer[i+4..i+8].try_into().unwrap()) as usize;
+        let title = String::from_utf8_lossy(&buffer[i+8..i+8+title_length]).to_string();
+        let link_count = u32::from_le_bytes(buffer[i+8+title_length..i+8+title_length+4].try_into().unwrap()) as usize;
+        let article_links: Vec<u32> = (0..link_count)
+            .map(|j| { u32::from_le_bytes(buffer[i+8+title_length+4+4*j..i+8+title_length+4+4*j+4].try_into().unwrap()) })
+            .collect();
+        let separator = u32::from_le_bytes(buffer[i+8+title_length+4+4*link_count..i+8+title_length+4+4*link_count+4].try_into().unwrap());
+        assert_eq!(separator, u32::MAX, "Expected separator u32::MAX not found");
+
+        i += 8 + title_length + 4 + 4 * link_count + 4;
+        titles.insert(article_id, title);
         links.insert(article_id, article_links);
     }
 
@@ -63,12 +65,12 @@ pub fn analyse() {
 
     println!("\nTop 10 articles with most outgoing links:");
     for (article_id, link_count) in outgoing_links.iter().take(10) {
-        println!("Article ID: {}, Outgoing links: {}", article_id, link_count);
+        println!("Article: {}, Outgoing links: {}", titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
     }
 
     println!("\nTop 10 articles with most incoming links:");
     for (article_id, link_count) in incoming_links.iter().take(10) {
-        println!("Article ID: {}, Incoming links: {}", article_id, link_count);
+        println!("Article: {}, Incoming links: {}", titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
     }
 
     println!("\nAnalysis completed in {:.2?}", start_time.elapsed());
