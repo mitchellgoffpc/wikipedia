@@ -66,7 +66,7 @@ fn extract_links(text: &str) -> Vec<String> {
             }
             let decoded_link = decode_html_entities(&link).to_string();
             if !IGNORE.iter().any(|prefix| decoded_link.starts_with(prefix)) {
-                links.push(decoded_link);
+                links.push(decoded_link.to_lowercase());
             }
             start = link_end + 2;
         } else {
@@ -198,7 +198,7 @@ pub fn index() {
     let article_titles_to_ids: HashMap<String, u32> = seek_position_map
         .values()
         .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating title index..."))
-        .flat_map(|articles| articles.iter().map(|(id, title)| (title.clone(), *id)))
+        .flat_map(|articles| articles.iter().map(|(id, title)| (title.to_lowercase(), *id)))
         .collect();
     let article_ids_to_titles: HashMap<u32, String> = seek_position_map
         .values()
