@@ -1,18 +1,26 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::time::Instant;
+use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
+
+fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
+    let progress_bar = ProgressBar::new(total);
+    progress_bar.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")
+        .unwrap()
+        .progress_chars("##-"));
+    progress_bar.set_message(message.to_owned());
+    progress_bar
+}
 
 pub fn analyse() {
-    let start_time = Instant::now();
-
-    // Read the links.bin file
     let file = File::open("links.bin").expect("Unable to open links.bin");
     let mut reader = BufReader::new(file);
     let mut buffer = Vec::new();
     reader.read_to_end(&mut buffer).expect("Unable to read links.bin");
 
     // Parse the binary data
+    let progress_bar = create_progress_bar(buffer.len() as u64, "Parsing links.bin");
     let mut links: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut titles: HashMap<u32, String> = HashMap::new();
     let mut i = 0;
@@ -28,18 +36,22 @@ pub fn analyse() {
         assert_eq!(separator, u32::MAX, "Expected separator u32::MAX not found");
 
         i += 8 + title_length + 4 + 4 * link_count + 4;
-        titles.insert(article_id, title);
+        titles.insert(article_id, title.to_lowercase());
         links.insert(article_id, article_links);
-    }
 
-    println!("Parsing links.bin completed in {:.2?}", start_time.elapsed());
+        progress_bar.set_position(i as u64);
+    }
+    progress_bar.finish_and_clear();
+    println!("Found {} articles", links.len());
 
     // Analyze the link structure
     let total_articles = links.len();
     let total_links: usize = links.values().map(|v| v.len()).sum();
     let articles_with_links = links.values().filter(|v| !v.is_empty()).count();
+
+    let progress_bar = create_progress_bar(links.len() as u64, "Analyzing links");
     let mut unique_links = HashSet::<u32>::new();
-    for links in links.values() {
+    for links in links.values().progress_with(progress_bar) {
         unique_links.extend(links);
     }
 
@@ -47,8 +59,9 @@ pub fn analyse() {
     let mut outgoing_links = links.iter().map(|(k, v)| (*k, v.len())).collect::<Vec<_>>();
     outgoing_links.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
 
+    let progress_bar = create_progress_bar(links.len() as u64, "Calculating incoming links");
     let mut incoming_links = HashMap::new();
-    for (_, links) in &links {
+    for (_, links) in links.iter().progress_with(progress_bar) {
         for &link in links {
             *incoming_links.entry(link).or_insert(0) += 1;
         }
@@ -72,6 +85,4 @@ pub fn analyse() {
     for (article_id, link_count) in incoming_links.iter().take(10) {
         println!("Article: {}, Incoming links: {}", titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
     }
-
-    println!("\nAnalysis completed in {:.2?}", start_time.elapsed());
 }
