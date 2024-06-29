@@ -14,16 +14,8 @@ fn main() {
     }
 
     match args[1].as_str() {
-        "index" => {
-            println!("Starting indexing process...");
-            index::index();
-            println!("Indexing process completed.");
-        }
-        "analyse" => {
-            println!("Starting analysis process...");
-            analyse::analyse();
-            println!("Analysis process completed.");
-        }
+        "index" => { index::index() }
+        "analyse" => { analyse::analyse() }
         _ => {
             println!("Unknown command: {}", args[1]);
             println!("Available commands:");

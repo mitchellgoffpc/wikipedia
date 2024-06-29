@@ -6,17 +6,31 @@ use bzip2::read::BzDecoder;
 use xml::reader::{EventReader, XmlEvent};
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
-use std::time::Instant;
 use html_escape::decode_html_entities;
+use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
+
+fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
+    let progress_bar = ProgressBar::new(total);
+    progress_bar.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")
+        .unwrap()
+        .progress_chars("##-"));
+    progress_bar.set_message(message.to_owned());
+    progress_bar
+}
 
 fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     let file = File::open(file_path).expect("Unable to open file");
     let reader = BufReader::new(file);
 
+    let total_lines = reader.lines().count();
+    let file = File::open(file_path).expect("Unable to open file");
+    let reader = BufReader::new(file);
+
     let mut seek_position_map: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
-    for line in reader.lines() {
+    for line in reader.lines().progress_with(create_progress_bar(total_lines as u64, "Extracting index...")) {
         if let Ok(line) = line {
             let parts: Vec<&str> = line.splitn(3, ':').collect();
             if parts.len() != 3 { continue; }
@@ -161,26 +175,25 @@ pub fn index() {
     let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
     let articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
 
-    let start_time = Instant::now();
     let seek_position_map = load_index(index_path);
     println!("Total number of chunks: {}", seek_position_map.len());
-    println!("Index extraction time: {:.3?}", start_time.elapsed());
 
-    let start_time = Instant::now();
     let article_titles_to_ids: HashMap<String, u32> = seek_position_map
         .values()
+        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating title index..."))
         .flat_map(|articles| articles.iter().map(|(id, title)| (title.clone(), *id)))
         .collect();
     let article_ids_to_titles: HashMap<u32, String> = seek_position_map
         .values()
+        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating id index..."))
         .flat_map(|articles| articles.iter().map(|(id, title)| (*id, title.clone())))
         .collect();
-
     println!("Total articles: {}", article_titles_to_ids.len());
-    println!("Title index creation time: {:.3?}", start_time.elapsed());
 
-    let start_time = Instant::now();
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
+    let file = File::open(articles_path).expect("Unable to open articles file");
+    let file_size = file.metadata().expect("Failed to get file metadata").len();
+    positions.push(&file_size);
     positions.sort_unstable();
 
     let num_threads = 8;
@@ -191,8 +204,10 @@ pub fn index() {
     let red_links = Arc::new(Mutex::new(0));
     let article_links = Arc::new(Mutex::new(HashMap::<u32, Vec<u32>>::new()));
     let article_titles_to_ids = Arc::new(article_titles_to_ids);
+    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Extracting articles..."));
 
-    for chunk_index in 0..100.min(positions.len() - 1) {
+    // Process chunks in using the thread pool
+    for chunk_index in 0..positions.len()-1 {
         let start_position = *positions[chunk_index];
         let end_position = *positions[chunk_index + 1];
 
@@ -202,6 +217,7 @@ pub fn index() {
         let article_titles_to_ids = Arc::clone(&article_titles_to_ids);
         let article_links = Arc::clone(&article_links);
         let articles_path = Arc::clone(&articles_path);
+        let progress_bar = Arc::clone(&progress_bar);
 
         pool.execute(move || {
             let (chunk_article_links, chunk_article_count, chunk_total_links, chunk_red_links) =
@@ -211,22 +227,23 @@ pub fn index() {
             *(total_links.lock().unwrap()) += chunk_total_links;
             *(red_links.lock().unwrap()) += chunk_red_links;
             article_links.lock().unwrap().extend(chunk_article_links);
+
+            progress_bar.inc(1);
         })
     }
 
     pool.join();
+    progress_bar.finish_and_clear();
 
     println!("Total articles extracted: {}", *total_articles.lock().unwrap());
     println!("Total links extracted: {}", *total_links.lock().unwrap());
     println!("Total red links: {}", *red_links.lock().unwrap());
-    println!("Article extraction time: {:.3?}", start_time.elapsed());
 
     // Dump article links map
-    let start_time = Instant::now();
     let article_links = article_links.lock().unwrap();
     let mut output_file = File::create("links.bin").expect("Failed to create output file");
 
-    for (&article_id, link_ids) in article_links.iter() {
+    for (&article_id, link_ids) in article_links.iter().progress_with(create_progress_bar((article_links.len() - 1) as u64, "Writing article links...")) {
         output_file.write_all(&article_id.to_le_bytes()).expect("Failed to write article ID");
 
         let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
@@ -241,6 +258,4 @@ pub fn index() {
 
         output_file.write_all(&u32::MAX.to_le_bytes()).expect("Failed to write separator");
     }
-
-    println!("Article links dump time: {:.3?}", start_time.elapsed());
 }
