@@ -170,6 +170,23 @@ fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, ar
     (article_links, articles.len(), total_links, red_links)
 }
 
+fn compute_article_byte_string(article_id: u32, title: &str, link_ids: &[u32]) -> Vec<u8> {
+    let mut output_buffer = Vec::new();
+    output_buffer.extend_from_slice(&article_id.to_le_bytes());
+
+    let title_bytes = title.as_bytes();
+    output_buffer.extend_from_slice(&(title_bytes.len() as u32).to_le_bytes());
+    output_buffer.extend_from_slice(title_bytes);
+
+    output_buffer.extend_from_slice(&(link_ids.len() as u32).to_le_bytes());
+    for &link_id in link_ids {
+        output_buffer.extend_from_slice(&link_id.to_le_bytes());
+    }
+
+    output_buffer.extend_from_slice(&u32::MAX.to_le_bytes());
+    output_buffer
+}
+
 
 pub fn index() {
     let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
@@ -202,9 +219,10 @@ pub fn index() {
     let total_articles = Arc::new(Mutex::new(0));
     let total_links = Arc::new(Mutex::new(0));
     let red_links = Arc::new(Mutex::new(0));
-    let article_links = Arc::new(Mutex::new(HashMap::<u32, Vec<u32>>::new()));
     let article_titles_to_ids = Arc::new(article_titles_to_ids);
+    let article_ids_to_titles = Arc::new(article_ids_to_titles);
     let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Extracting articles..."));
+    let output_file = Arc::new(Mutex::new(File::create("links.bin").expect("Failed to create output file")));
 
     // Process chunks in using the thread pool
     for chunk_index in 0..positions.len()-1 {
@@ -215,9 +233,10 @@ pub fn index() {
         let total_links = Arc::clone(&total_links);
         let red_links = Arc::clone(&red_links);
         let article_titles_to_ids = Arc::clone(&article_titles_to_ids);
-        let article_links = Arc::clone(&article_links);
+        let article_ids_to_titles = Arc::clone(&article_ids_to_titles);
         let articles_path = Arc::clone(&articles_path);
         let progress_bar = Arc::clone(&progress_bar);
+        let output_file = Arc::clone(&output_file);
 
         pool.execute(move || {
             let (chunk_article_links, chunk_article_count, chunk_total_links, chunk_red_links) =
@@ -226,7 +245,13 @@ pub fn index() {
             *(total_articles.lock().unwrap()) += chunk_article_count;
             *(total_links.lock().unwrap()) += chunk_total_links;
             *(red_links.lock().unwrap()) += chunk_red_links;
-            article_links.lock().unwrap().extend(chunk_article_links);
+
+            let mut output_file = output_file.lock().unwrap();
+            for (&article_id, link_ids) in chunk_article_links.iter() {
+                let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
+                let output_buffer = compute_article_byte_string(article_id, title, link_ids);
+                output_file.write_all(&output_buffer).expect("Failed to write to output file");
+            }
 
             progress_bar.inc(1);
         })
@@ -238,26 +263,4 @@ pub fn index() {
     println!("Total articles extracted: {}", *total_articles.lock().unwrap());
     println!("Total links extracted: {}", *total_links.lock().unwrap());
     println!("Total red links: {}", *red_links.lock().unwrap());
-
-    // Dump article links map
-    let article_links = article_links.lock().unwrap();
-    let mut output_file = File::create("links.bin").expect("Failed to create output file");
-
-    for (&article_id, link_ids) in article_links.iter().progress_with(create_progress_bar((article_links.len() - 1) as u64, "Writing article links...")) {
-        let mut output_buffer = Vec::new();
-        output_buffer.extend_from_slice(&article_id.to_le_bytes());
-
-        let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
-        let title_bytes = title.as_bytes();
-        output_buffer.extend_from_slice(&(title_bytes.len() as u32).to_le_bytes());
-        output_buffer.extend_from_slice(title_bytes);
-
-        output_buffer.extend_from_slice(&(link_ids.len() as u32).to_le_bytes());
-        for &link_id in link_ids {
-            output_buffer.extend_from_slice(&link_id.to_le_bytes());
-        }
-
-        output_buffer.extend_from_slice(&u32::MAX.to_le_bytes());
-        output_file.write_all(&output_buffer).expect("Failed to write to output file");
-    }
 }
