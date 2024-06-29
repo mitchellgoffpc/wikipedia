@@ -244,18 +244,20 @@ pub fn index() {
     let mut output_file = File::create("links.bin").expect("Failed to create output file");
 
     for (&article_id, link_ids) in article_links.iter().progress_with(create_progress_bar((article_links.len() - 1) as u64, "Writing article links...")) {
-        output_file.write_all(&article_id.to_le_bytes()).expect("Failed to write article ID");
+        let mut output_buffer = Vec::new();
+        output_buffer.extend_from_slice(&article_id.to_le_bytes());
 
         let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
         let title_bytes = title.as_bytes();
-        output_file.write_all(&(title_bytes.len() as u32).to_le_bytes()).expect("Failed to write title length");
-        output_file.write_all(title_bytes).expect("Failed to write title");
+        output_buffer.extend_from_slice(&(title_bytes.len() as u32).to_le_bytes());
+        output_buffer.extend_from_slice(title_bytes);
 
-        output_file.write_all(&(link_ids.len() as u32).to_le_bytes()).expect("Failed to write link count");
+        output_buffer.extend_from_slice(&(link_ids.len() as u32).to_le_bytes());
         for &link_id in link_ids {
-            output_file.write_all(&link_id.to_le_bytes()).expect("Failed to write link ID");
+            output_buffer.extend_from_slice(&link_id.to_le_bytes());
         }
 
-        output_file.write_all(&u32::MAX.to_le_bytes()).expect("Failed to write separator");
+        output_buffer.extend_from_slice(&u32::MAX.to_le_bytes());
+        output_file.write_all(&output_buffer).expect("Failed to write to output file");
     }
 }
