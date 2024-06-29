@@ -77,12 +77,12 @@ pub fn analyse() {
     println!("Average links per article: {:.2}", total_links as f64 / total_articles as f64);
 
     println!("\nTop 10 articles with most outgoing links:");
-    for (article_id, link_count) in outgoing_links.iter().take(10) {
-        println!("Article: {}, Outgoing links: {}", titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
+    for (rank, (article_id, link_count)) in outgoing_links.iter().take(10).enumerate() {
+        println!("{:>2}) {} ({})", rank + 1, titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
     }
 
     println!("\nTop 10 articles with most incoming links:");
-    for (article_id, link_count) in incoming_links.iter().take(10) {
-        println!("Article: {}, Incoming links: {}", titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
+    for (rank, (article_id, link_count)) in incoming_links.iter().take(10).enumerate() {
+        println!("{:>2}) {} ({})", rank + 1, titles.get(article_id).unwrap_or(&format!("Unknown (ID: {})", article_id)), link_count);
     }
 }
