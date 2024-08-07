@@ -2,17 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::fs::File;
 use std::io::{BufReader, Read};
-use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
-
-fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new(total);
-    progress_bar.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")
-        .unwrap()
-        .progress_chars("##-"));
-    progress_bar.set_message(message.to_owned());
-    progress_bar
-}
+use indicatif::ProgressIterator;
+use crate::helpers::create_progress_bar;
 
 pub fn analyse(data_path: &Path) {
     let links_file_path = data_path.join("links.bin");

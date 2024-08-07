@@ -1,5 +1,7 @@
 mod index;
 mod analyse;
+mod helpers;
+
 use std::env;
 use std::path::Path;
 

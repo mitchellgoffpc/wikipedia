@@ -8,19 +8,10 @@ use xml::reader::{EventReader, XmlEvent};
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use html_escape::decode_html_entities;
-use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
+use indicatif::ProgressIterator;
+use crate::helpers::create_progress_bar;
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
-
-fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new(total);
-    progress_bar.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")
-        .unwrap()
-        .progress_chars("##-"));
-    progress_bar.set_message(message.to_owned());
-    progress_bar
-}
 
 fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     let file = File::open(file_path).expect("Unable to open file");
