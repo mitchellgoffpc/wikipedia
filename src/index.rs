@@ -1,48 +1,16 @@
 use std::io::prelude::*;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::fs::File;
 use std::collections::HashMap;
 use bzip2::read::BzDecoder;
-use xml::reader::{EventReader, XmlEvent};
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
-use html_escape::decode_html_entities;
 use indicatif::ProgressIterator;
-use crate::helpers::create_progress_bar;
+use html_escape::decode_html_entities;
+use crate::helpers::{create_progress_bar, load_index, parse_chunk};
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
-
-fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
-    let file = File::open(file_path).expect("Unable to open file");
-    let decoder = BzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-    let total_lines = reader.lines().count();
-
-    let file = File::open(file_path).expect("Unable to open file");
-    let decoder = BzDecoder::new(file);
-    let reader = BufReader::new(decoder);
-
-    let mut seek_position_map: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
-    for line in reader.lines().progress_with(create_progress_bar(total_lines as u64, "Extracting index...")) {
-        if let Ok(line) = line {
-            let parts: Vec<&str> = line.splitn(3, ':').collect();
-            if parts.len() != 3 { continue; }
-
-            let seek_position = parts[0].parse::<u64>().unwrap();
-            let article_id = parts[1].parse::<u32>().unwrap();
-            let article_title = decode_html_entities(parts[2]).to_string();
-            if IGNORE.iter().any(|prefix| article_title.starts_with(prefix)) { continue; }
-
-            seek_position_map
-                .entry(seek_position)
-                .or_insert_with(Vec::new)
-                .push((article_id, article_title));
-        }
-    }
-
-    seek_position_map
-}
 
 fn extract_links(text: &str) -> Vec<String> {
     let mut links = Vec::new();
@@ -70,88 +38,27 @@ fn extract_links(text: &str) -> Vec<String> {
     links
 }
 
-fn parse_chunk(xml_text: &str) -> HashMap<u32, (String, Vec<String>)> {
-    let parser = EventReader::new(xml_text.as_bytes());
-    let mut articles = HashMap::new();
-    let mut in_page = false;
-    let mut in_title = false;
-    let mut in_text = false;
-    let mut in_id = false;
-    let mut current_title = String::new();
-    let mut current_text = String::new();
-    let mut current_id = 0;
-
-    for event in parser {
-        match event {
-            Ok(XmlEvent::StartElement { name, .. }) => {
-                match name.local_name.as_str() {
-                    "page" => in_page = true,
-                    "title" => in_title = true,
-                    "text" => in_text = true,
-                    "id" if in_page && current_id == 0 => in_id = true,
-                    _ => {}
-                }
-            }
-            Ok(XmlEvent::EndElement { name, .. }) => {
-                match name.local_name.as_str() {
-                    "page" => {
-                        if !IGNORE.iter().any(|prefix| current_title.starts_with(prefix)) {
-                            articles.insert(current_id, (current_title.clone(), extract_links(&current_text)));
-                        }
-                        current_title.clear();
-                        current_text.clear();
-                        current_id = 0;
-                        in_page = false;
-                    }
-                    "title" => in_title = false,
-                    "text" => in_text = false,
-                    "id" => in_id = false,
-                    _ => {}
-                }
-            }
-            Ok(XmlEvent::Characters(text)) => {
-                if in_page {
-                    if in_title {
-                        current_title.push_str(&text);
-                    } else if in_text {
-                        current_text.push_str(&text);
-                    } else if in_id {
-                        current_id = text.parse().unwrap_or(0);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    articles
-}
-
 fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, article_titles_to_ids: &HashMap<String, u32>) -> (HashMap<u32, Vec<u32>>, usize, usize, usize) {
     let chunk_size = (end_position - start_position) as usize;
     let mut buffer = vec![0u8; chunk_size];
     let mut file = File::open(articles_path).expect("Unable to open articles file");
-    file.seek(std::io::SeekFrom::Start(start_position))
-        .expect("Failed to seek to the position");
-    file.read_exact(&mut buffer)
-        .expect("Error reading from the file");
+    file.seek(std::io::SeekFrom::Start(start_position)).expect("Failed to seek to the position");
+    file.read_exact(&mut buffer).expect("Error reading from the file");
 
     let mut decoder = BzDecoder::new(&buffer[..]);
     let mut decompressed_data = Vec::new();
-    decoder.read_to_end(&mut decompressed_data)
-           .expect("Error during decompression");
+    decoder.read_to_end(&mut decompressed_data).expect("Error during decompression");
 
-    let xml_text = String::from_utf8(decompressed_data)
-        .expect("Failed to convert decompressed bytes to UTF-8");
-
+    let xml_text = String::from_utf8(decompressed_data).expect("Failed to convert decompressed bytes to UTF-8");
     let articles = parse_chunk(&xml_text);
     let mut article_links = HashMap::new();
     let mut total_links = 0;
     let mut red_links = 0;
 
-    for (article_id, (_, links)) in &articles {
+    for (article_id, (_, content)) in &articles {
+        let links = extract_links(&content);
         let mut link_ids = Vec::new();
-        for link in links {
+        for link in &links {
             match article_titles_to_ids.get(link) {
                 Some(&link_id) => link_ids.push(link_id),
                 None => red_links += 1,
@@ -164,7 +71,7 @@ fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, ar
     (article_links, articles.len(), total_links, red_links)
 }
 
-fn compute_article_byte_string(article_id: u32, title: &str, link_ids: &[u32]) -> Vec<u8> {
+fn get_article_byte_string(article_id: u32, title: &str, link_ids: &[u32]) -> Vec<u8> {
     let mut output_buffer = Vec::new();
     output_buffer.extend_from_slice(&article_id.to_le_bytes());
 
@@ -247,7 +154,7 @@ pub fn index(data_path: &Path) {
             let mut output_file = output_file.lock().unwrap();
             for (&article_id, link_ids) in chunk_article_links.iter() {
                 let title = article_ids_to_titles.get(&article_id).expect("Article ID not found");
-                let output_buffer = compute_article_byte_string(article_id, title, link_ids);
+                let output_buffer = get_article_byte_string(article_id, title, link_ids);
                 output_file.write_all(&output_buffer).expect("Failed to write to output file");
             }
 
