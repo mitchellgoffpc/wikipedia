@@ -42,7 +42,7 @@ pub fn dump(data_path: &Path) {
     let pool = ThreadPool::new(num_threads);
     let articles_path = Arc::new(articles_path.to_str().unwrap().to_string());
     let total_articles = Arc::new(Mutex::new(0));
-    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Dumping chunks..."));
+    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Dumping chunks"));
     let output_dir = Arc::new(output_dir);
 
     // Process chunks using the thread pool

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use bzip2::read::BzDecoder;
@@ -7,10 +8,14 @@ use xml::reader::{EventReader, XmlEvent};
 use html_escape::decode_html_entities;
 
 pub const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
+const PROGRESS_TEMPLATE_BYTES: &str = "{msg}: {percent}% {bar:40.cyan/blue} {bytes}/{total_bytes} [{elapsed_precise}>{eta_precise}]";
+const PROGRESS_TEMPLATE_RAW: &str = "{msg}: {percent}% {bar:40.cyan/blue} {pos}/{len} [{elapsed_precise}>{eta_precise}]";
 
 struct ProgressReader<R: Read> { inner: R, progress_bar: ProgressBar }
 impl<R: Read> ProgressReader<R> {
-    fn new(inner: R, progress_bar: ProgressBar) -> Self { ProgressReader { inner, progress_bar }}
+    fn new(inner: R, progress_bar: ProgressBar) -> Self {
+        ProgressReader { inner, progress_bar: progress_bar.with_style(get_progress_style(PROGRESS_TEMPLATE_BYTES)) }
+    }
 }
 impl<R: Read> Read for ProgressReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -22,22 +27,39 @@ impl<R: Read> Read for ProgressReader<R> {
     }
 }
 
-pub fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new(total);
-    progress_bar.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")
+fn get_progress_style(template: &str) -> ProgressStyle {
+    ProgressStyle::default_bar()
+        .progress_chars("##-")
+        .template(template)
         .unwrap()
-        .progress_chars("##-"));
-    progress_bar.set_message(message.to_owned());
-    progress_bar
+}
+
+pub fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
+    ProgressBar::new(total)
+        .with_style(get_progress_style(PROGRESS_TEMPLATE_RAW))
+        .with_message(message.to_owned())
 }
 
 pub fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
-    let file = File::open(file_path).expect("Unable to open file");
+    let bz2_path = Path::new(file_path);
+    let decompressed_path = bz2_path.with_extension("");
+
+    // Decompress the file if it doesn't exist
+    if !decompressed_path.exists() {
+        let bz2_file = File::open(bz2_path).expect("Unable to open bz2 file");
+        let file_size = bz2_file.metadata().expect("Unable to get file metadata").len();
+        let progress_bar = create_progress_bar(file_size, "Decompressing index");
+        let decoder = BzDecoder::new(ProgressReader::new(bz2_file, progress_bar));
+
+        let mut decompressed_file = File::create(&decompressed_path).expect("Unable to create decompressed file");
+        std::io::copy(&mut BufReader::new(decoder), &mut decompressed_file).expect("Failed to decompress the file");
+    }
+
+    // Read from the decompressed file
+    let file = File::open(&decompressed_path).expect("Unable to open decompressed file");
     let file_size = file.metadata().expect("Unable to get file metadata").len();
-    let progress_bar = create_progress_bar(file_size, "Extracting index...");
-    let decoder = BzDecoder::new(ProgressReader::new(file, progress_bar));
-    let reader = BufReader::new(decoder);
+    let progress_bar = create_progress_bar(file_size, "Loading index");
+    let reader = BufReader::new(ProgressReader::new(file, progress_bar));
 
     let mut seek_position_map: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
     for line in reader.lines().filter_map(Result::ok) {

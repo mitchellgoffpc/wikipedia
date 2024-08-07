@@ -87,12 +87,12 @@ pub fn index(data_path: &Path) {
 
     let article_titles_to_ids: HashMap<String, u32> = seek_position_map
         .values()
-        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating title index..."))
+        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating title index"))
         .flat_map(|articles| articles.iter().map(|(id, title)| (title.to_lowercase(), *id)))
         .collect();
     let article_ids_to_titles: HashMap<u32, String> = seek_position_map
         .values()
-        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating id index..."))
+        .progress_with(create_progress_bar(seek_position_map.len() as u64, "Creating id index"))
         .flat_map(|articles| articles.iter().map(|(id, title)| (*id, title.clone())))
         .collect();
     println!("Total articles: {}", article_titles_to_ids.len());
@@ -111,7 +111,7 @@ pub fn index(data_path: &Path) {
     let red_links = Arc::new(Mutex::new(0));
     let article_titles_to_ids = Arc::new(article_titles_to_ids);
     let article_ids_to_titles = Arc::new(article_ids_to_titles);
-    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Extracting articles..."));
+    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Extracting articles"));
     let output_file = Arc::new(Mutex::new(File::create(data_path.join("links.bin")).expect("Failed to create output file")));
 
     // Process chunks in using the thread pool
