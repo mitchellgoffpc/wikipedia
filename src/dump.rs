@@ -5,15 +5,14 @@ use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use crate::helpers::{create_progress_bar, load_index, load_chunk};
 
-fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, output_dir: &Path) -> usize {
+fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, output_dir: &Path, chunk_index: usize) -> usize {
     let articles = load_chunk(articles_path, start_position, end_position);
-    for (article_id, (title, content)) in &articles {
-        let file_name = format!("{}.txt", article_id);
-        let file_path = output_dir.join(file_name);
-        let mut file = File::create(file_path).expect("Failed to create article file");
-        writeln!(file, "{}", title).expect("Failed to write title");
-        writeln!(file).expect("Failed to write newline");
-        write!(file, "{}", content).expect("Failed to write content");
+    let file_name = format!("{:0>6}.txt", chunk_index);
+    let file_path = output_dir.join(file_name);
+    let mut file = File::create(file_path).expect("Failed to create chunk file");
+
+    for (_, (title, content)) in &articles {
+        write!(file, "{}\n{}\n\n", title, content).expect("Failed to write article");
     }
 
     articles.len()
@@ -27,7 +26,7 @@ pub fn dump(data_path: &Path) {
         std::process::exit(1);
     }
 
-    let output_dir = data_path.join("articles");
+    let output_dir = data_path.join("chunks");
     create_dir_all(&output_dir).expect("Failed to create output directory");
 
     let seek_position_map = load_index(index_path.to_str().unwrap());
@@ -43,7 +42,7 @@ pub fn dump(data_path: &Path) {
     let pool = ThreadPool::new(num_threads);
     let articles_path = Arc::new(articles_path.to_str().unwrap().to_string());
     let total_articles = Arc::new(Mutex::new(0));
-    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Dumping articles..."));
+    let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Dumping chunks..."));
     let output_dir = Arc::new(output_dir);
 
     // Process chunks using the thread pool
@@ -57,7 +56,7 @@ pub fn dump(data_path: &Path) {
         let output_dir = Arc::clone(&output_dir);
 
         pool.execute(move || {
-            let chunk_article_count = process_chunk(&articles_path, start_position, end_position, &output_dir);
+            let chunk_article_count = process_chunk(&articles_path, start_position, end_position, &output_dir, chunk_index);
             *(total_articles.lock().unwrap()) += chunk_article_count;
             progress_bar.inc(1);
         })

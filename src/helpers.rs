@@ -6,7 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use xml::reader::{EventReader, XmlEvent};
 use html_escape::decode_html_entities;
 
-const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
+pub const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
 
 struct ProgressReader<R: Read> { inner: R, progress_bar: ProgressBar }
 impl<R: Read> ProgressReader<R> {

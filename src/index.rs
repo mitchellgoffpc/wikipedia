@@ -6,9 +6,7 @@ use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use indicatif::ProgressIterator;
 use html_escape::decode_html_entities;
-use crate::helpers::{create_progress_bar, load_index, load_chunk};
-
-const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
+use crate::helpers::{IGNORE, create_progress_bar, load_index, load_chunk};
 
 fn extract_links(text: &str) -> Vec<String> {
     let mut links = Vec::new();
