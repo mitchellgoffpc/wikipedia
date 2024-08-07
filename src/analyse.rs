@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
@@ -13,8 +14,14 @@ fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
     progress_bar
 }
 
-pub fn analyse() {
-    let file = File::open("links.bin").expect("Unable to open links.bin");
+pub fn analyse(data_path: &Path) {
+    let links_file_path = data_path.join("links.bin");
+    if !links_file_path.exists() {
+        eprintln!("Error: Unable to locate links.bin in {}", data_path.to_str().unwrap());
+        std::process::exit(1);
+    }
+
+    let file = File::open(&links_file_path).expect("Unable to open links.bin");
     let mut reader = BufReader::new(file);
     let mut buffer = Vec::new();
     reader.read_to_end(&mut buffer).expect("Unable to read links.bin");

@@ -1,5 +1,6 @@
 use std::io::prelude::*;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::fs::File;
 use std::collections::HashMap;
 use bzip2::read::BzDecoder;
@@ -23,11 +24,13 @@ fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
 
 fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     let file = File::open(file_path).expect("Unable to open file");
-    let reader = BufReader::new(file);
-
+    let decoder = BzDecoder::new(file);
+    let reader = BufReader::new(decoder);
     let total_lines = reader.lines().count();
+
     let file = File::open(file_path).expect("Unable to open file");
-    let reader = BufReader::new(file);
+    let decoder = BzDecoder::new(file);
+    let reader = BufReader::new(decoder);
 
     let mut seek_position_map: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
     for line in reader.lines().progress_with(create_progress_bar(total_lines as u64, "Extracting index...")) {
@@ -188,11 +191,15 @@ fn compute_article_byte_string(article_id: u32, title: &str, link_ids: &[u32]) -
 }
 
 
-pub fn index() {
-    let index_path = "data/enwiki-20240420-pages-articles-multistream-index.txt";
-    let articles_path = "data/enwiki-20240420-pages-articles-multistream.xml.bz2";
+pub fn index(data_path: &Path) {
+    let index_path = data_path.join("enwiki-20240801-pages-articles-multistream-index.txt.bz2");
+    let articles_path = data_path.join("enwiki-20240801-pages-articles-multistream.xml.bz2");
+    if !index_path.exists() || !articles_path.exists() {
+        eprintln!("Error: Unable to locate data files in {}", data_path.to_str().unwrap());
+        std::process::exit(1);
+    }
 
-    let seek_position_map = load_index(index_path);
+    let seek_position_map = load_index(index_path.to_str().unwrap());
     println!("Total number of chunks: {}", seek_position_map.len());
 
     let article_titles_to_ids: HashMap<String, u32> = seek_position_map
@@ -208,21 +215,21 @@ pub fn index() {
     println!("Total articles: {}", article_titles_to_ids.len());
 
     let mut positions: Vec<&u64> = seek_position_map.keys().collect();
-    let file = File::open(articles_path).expect("Unable to open articles file");
+    let file = File::open(&articles_path).expect("Unable to open articles file");
     let file_size = file.metadata().expect("Failed to get file metadata").len();
     positions.push(&file_size);
     positions.sort_unstable();
 
     let num_threads = 8;
     let pool = ThreadPool::new(num_threads);
-    let articles_path = Arc::new(articles_path.to_string());
+    let articles_path = Arc::new(articles_path.to_str().unwrap().to_string());
     let total_articles = Arc::new(Mutex::new(0));
     let total_links = Arc::new(Mutex::new(0));
     let red_links = Arc::new(Mutex::new(0));
     let article_titles_to_ids = Arc::new(article_titles_to_ids);
     let article_ids_to_titles = Arc::new(article_ids_to_titles);
     let progress_bar = Arc::new(create_progress_bar((positions.len()-1) as u64, "Extracting articles..."));
-    let output_file = Arc::new(Mutex::new(File::create("links.bin").expect("Failed to create output file")));
+    let output_file = Arc::new(Mutex::new(File::create(data_path.join("links.bin")).expect("Failed to create output file")));
 
     // Process chunks in using the thread pool
     for chunk_index in 0..positions.len()-1 {
