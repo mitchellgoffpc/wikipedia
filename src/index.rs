@@ -1,14 +1,12 @@
-use std::io::prelude::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::fs::File;
 use std::collections::HashMap;
-use bzip2::read::BzDecoder;
 use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use indicatif::ProgressIterator;
 use html_escape::decode_html_entities;
-use crate::helpers::{create_progress_bar, load_index, parse_chunk};
+use crate::helpers::{create_progress_bar, load_index, load_chunk};
 
 const IGNORE: [&str; 7] = ["Category:", "Wikipedia:", "File:", "Template:", "Draft:", "Portal:", "Module:"];
 
@@ -39,18 +37,7 @@ fn extract_links(text: &str) -> Vec<String> {
 }
 
 fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, article_titles_to_ids: &HashMap<String, u32>) -> (HashMap<u32, Vec<u32>>, usize, usize, usize) {
-    let chunk_size = (end_position - start_position) as usize;
-    let mut buffer = vec![0u8; chunk_size];
-    let mut file = File::open(articles_path).expect("Unable to open articles file");
-    file.seek(std::io::SeekFrom::Start(start_position)).expect("Failed to seek to the position");
-    file.read_exact(&mut buffer).expect("Error reading from the file");
-
-    let mut decoder = BzDecoder::new(&buffer[..]);
-    let mut decompressed_data = Vec::new();
-    decoder.read_to_end(&mut decompressed_data).expect("Error during decompression");
-
-    let xml_text = String::from_utf8(decompressed_data).expect("Failed to convert decompressed bytes to UTF-8");
-    let articles = parse_chunk(&xml_text);
+    let articles = load_chunk(articles_path, start_position, end_position);
     let mut article_links = HashMap::new();
     let mut total_links = 0;
     let mut red_links = 0;
