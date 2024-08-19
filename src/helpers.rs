@@ -40,7 +40,7 @@ pub fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
         .with_message(message.to_owned())
 }
 
-pub fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
+pub fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {  // chunk_offset -> [(id, title)]
     let bz2_path = Path::new(file_path);
     let decompressed_path = bz2_path.with_extension("");
 
@@ -80,7 +80,7 @@ pub fn load_index(file_path: &str) -> HashMap<u64, Vec<(u32, String)>> {
     seek_position_map
 }
 
-pub fn load_chunk(file_path: &str, start_position: u64, end_position: u64) -> HashMap<u32, (String, String)> {  // id -> (title, content)
+pub fn load_chunk(file_path: &str, start_position: u64, end_position: u64) -> Vec<(u32, String, String)> {  // (id, title, content)
     let chunk_size = (end_position - start_position) as usize;
     let mut buffer = vec![0u8; chunk_size];
     let mut file = File::open(file_path).expect("Unable to open file");
@@ -93,7 +93,7 @@ pub fn load_chunk(file_path: &str, start_position: u64, end_position: u64) -> Ha
 
     let xml_text = String::from_utf8(decompressed_data).expect("Failed to convert decompressed bytes to UTF-8");
     let parser = EventReader::new(xml_text.as_bytes());
-    let mut articles = HashMap::new();
+    let mut articles = Vec::new();
     let mut in_page = false;
     let mut in_title = false;
     let mut in_text = false;
@@ -117,7 +117,7 @@ pub fn load_chunk(file_path: &str, start_position: u64, end_position: u64) -> Ha
                 match name.local_name.as_str() {
                     "page" => {
                         if !IGNORE.iter().any(|prefix| current_title.starts_with(prefix)) {
-                            articles.insert(current_id, (current_title.clone(), current_text.clone()));
+                            articles.push((current_id, current_title.clone(), current_text.clone()));
                         }
                         current_title.clear();
                         current_text.clear();

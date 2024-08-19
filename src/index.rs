@@ -40,7 +40,7 @@ fn process_chunk(articles_path: &str, start_position: u64, end_position: u64, ar
     let mut total_links = 0;
     let mut red_links = 0;
 
-    for (article_id, (_, content)) in &articles {
+    for (article_id, _, content) in &articles {
         let links = extract_links(&content);
         let mut link_ids = Vec::new();
         for link in &links {
